@@ -1,8 +1,10 @@
 # 아래는 사용자의 requirements 설치 이전, 플랫폼에서 제공하는 기본 python 3.11 이미지에 설치되는 패키지입니다.
 # 호환성을 고려하여 추가 requirements를 작성하시고, 가능한 아래 목록의 패키지는 미리 설치되어 있으므로 목록에서 제거해주세요.
-nvflare==2.5.2 # 현 시스템 버전 2.5.2
+
+nvflare==2.7.0 # 현 시스템 버전 2.7
 numpy==1.26.4 # numpy 2.0 이상부터는 nvflare와 호환되지 않아 주의필요
 mysql-connector-python==9.4.0
+pyopenssl==25.3.0
 cloudpathlib
 awscli
 boto3
