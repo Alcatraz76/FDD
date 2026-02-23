@@ -2,13 +2,15 @@ import torch
 import nvflare.client as flare
 import time
 import traceback
-
 from training_manager import TrainingManager
+from model_manager import recive_model_stats, print_stats, model_stats
 from data import data_loader
 from model import model_loader
 from train_eval import train, evaluate
 
 DEVICE = torch.device("cuda:0")
+
+# script.py는 수정이 불가능하며, 수정하여 제출하더라도 original로 변경됩니다.
 
 def main():
 	# 1. 플레어 초기화
@@ -35,7 +37,9 @@ def main():
 
 		err_code = 3000
 		model = model_loader(train_manager.configs) # -> torch.nn.Module
-	
+
+		print_stats(model_stats(model))
+
 	except Exception as e:
 		train_manager.err(err_code, traceback.format_exc())
 
@@ -47,6 +51,8 @@ def main():
 			err_code = 4000 # flare 서버수신
 			input_model = flare.receive()
 
+			recive_model_stats(input_model)
+
 			# 8.2. 현재라운드 설정
 			train_manager.current_round = input_model.current_round+1
 			train_manager.metric_dict[train_manager.current_round] = {}
@@ -54,7 +60,9 @@ def main():
 
 			# 8.3 수신 모델 파라미터 클라이언트 model 인스턴스에 로드
 			err_code = 4001 # 서버 수신 모델 업데이트 오류
-			model.load_state_dict(input_model.params)
+			result = model.load_state_dict(input_model.params, strict=False)
+			print("missing:", len(result.missing_keys))
+			print("unexpected:", len(result.unexpected_keys))
 			# model to DEVICE
 			model.to(DEVICE)
 		
@@ -101,6 +109,7 @@ def main():
 			train_manager.status_upload()
 
 			output_model = flare.FLModel(params=model.cpu().state_dict())
+
 			flare.send(output_model)
 			train_manager.time_check("send_time", time.time())
 			
