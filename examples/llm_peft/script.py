@@ -3,14 +3,13 @@ import nvflare.client as flare
 import time
 import traceback
 from training_manager import TrainingManager
-from model_manager import recive_model_stats, print_stats, model_stats
+from model_manager import *
+from controller_manager import *
 from data import data_loader
 from model import model_loader
 from train_eval import train, evaluate
 
 DEVICE = torch.device("cuda:0")
-
-# script.py는 수정이 불가능하며, 수정하여 제출하더라도 original로 변경됩니다.
 
 def main():
 	# 1. 플레어 초기화
@@ -33,11 +32,14 @@ def main():
 
 		# 5. 사용자의 데이터 전처리 코드 호출
 		err_code = 2001
+		print(f"---------- Client side init : User data processing ----------")
 		data = data_loader(raw_datas, train_manager.configs) # -> Dict[str(key): DataLoader, ...]
 
 		err_code = 3000
+		print(f"---------- Client side init : User model loading ----------")
 		model = model_loader(train_manager.configs) # -> torch.nn.Module
 
+		print(f"---------- Client side init : User model stats ----------")
 		print_stats(model_stats(model))
 
 	except Exception as e:
@@ -51,20 +53,25 @@ def main():
 			err_code = 4000 # flare 서버수신
 			input_model = flare.receive()
 
-			recive_model_stats(input_model)
-
 			# 8.2. 현재라운드 설정
 			train_manager.current_round = input_model.current_round+1
 			train_manager.metric_dict[train_manager.current_round] = {}
 			train_manager.time_check("round_start", round_start)
+			print(f"---------- Round {train_manager.current_round} : start ----------")
 
 			# 8.3 수신 모델 파라미터 클라이언트 model 인스턴스에 로드
 			err_code = 4001 # 서버 수신 모델 업데이트 오류
+			print(f"---------- Round {train_manager.current_round} : Recived global model stats ----------")
+			recive_model_stats(input_model)
+
+			print(f"---------- Round {train_manager.current_round} : Recived global model --> local model weight load ----------")
 			result = model.load_state_dict(input_model.params, strict=False)
 			print("missing:", len(result.missing_keys))
 			print("unexpected:", len(result.unexpected_keys))
+			
 			# model to DEVICE
-			model.to(DEVICE)
+			model = model.to(DEVICE)
+			print(f"---------- Round {train_manager.current_round} : Recived model to {DEVICE} ----------")
 		
 			train_manager.time_check("receive_time", time.time())
 			
@@ -73,12 +80,14 @@ def main():
 			train_manager.status = "glob_eval"
 			train_manager.status_upload()
 			train_manager.time_check("glob_eval_start", time.time())
+			print(f"---------- Round {train_manager.current_round} : Global eval start ----------")
 			
 			# 글로벌 모델 eval
 			glob_metric = evaluate(model, data, train_manager.configs)
 			
 			train_manager.metric_save(glob_metric)
 			train_manager.time_check("glob_eval_end", time.time())
+			print(f"---------- Round {train_manager.current_round} : Global eval end ----------")
 
 			# 8.5. 학습
 			err_code = 6000 # 학습 오류
@@ -86,36 +95,52 @@ def main():
 			train_manager.status_upload()
 
 			train_manager.time_check("train_start", time.time())
+			print(f"---------- Round {train_manager.current_round} : Train start ----------")
+			print(f"---------- Round {train_manager.current_round} : Controller : {train_manager.controller} ----------")
 
-			train(model, data, train_manager.configs)
+			# scaffold
+			if train_manager.controller == "scaffold":
+				fl_scaffold = FLScaffold(model)
+				fl_scaffold.get_global_controls(input_model)
 			
-			train_manager.time_check("train_end", time.time())
+			train(model, data, train_manager.configs)
 
+			train_manager.time_check("train_end", time.time())
+			print(f"---------- Round {train_manager.current_round} : Train end ----------")
 			# 8.6. 로컬 학습 후 eval
 			err_code = 7000 # 로컬 모델 eval 오류
 			train_manager.status = "local_eval"
 			train_manager.status_upload()
 			train_manager.time_check("local_eval_start", time.time())
+			print(f"---------- Round {train_manager.current_round} : Local eval start ----------")
 
 			# 로컬 모델 eval
 			local_metric = evaluate(model, data, train_manager.configs)
 
 			train_manager.metric_save(local_metric)
 			train_manager.time_check("local_eval_end", time.time())
+			print(f"---------- Round {train_manager.current_round} : Local eval end ----------")
 
 			# 8.7. 모델 전송
 			err_code = 8000 # 모델 전송 오류
 			train_manager.status = "send"
 			train_manager.status_upload()
+			print(f"---------- Round {train_manager.current_round} : Try to send model ----------")
 
-			output_model = flare.FLModel(params=model.cpu().state_dict())
+			# scaffold
+			if train_manager.controller == "scaffold":
+				output_model = flare.FLModel(params=model.cpu().state_dict(), meta=fl_scaffold.scaffold_meta())
+			else:
+				output_model = flare.FLModel(params=model.cpu().state_dict())
 
 			flare.send(output_model)
 			train_manager.time_check("send_time", time.time())
-			
+			print(f"---------- Round {train_manager.current_round} : Model sent ----------")
+
 			train_manager.time_check("round_end", time.time())
 		
 		except Exception as e:
+			print(f"---------- Round {train_manager.current_round} : Error ----------")
 			train_manager.err(err_code, traceback.format_exc())
 
 	train_manager.status = "finished"
